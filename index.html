@@ -18,18 +18,22 @@ input[type=number]{width:70px}input[type=text]{width:100%}input[type=color]{padd
 .row label{width:62px;color:#999}
 .layer{display:flex;gap:6px;align-items:center;padding:4px 6px;border:1px solid #333;border-radius:4px;margin:3px 0;cursor:pointer}
 .layer.sel{border-color:#2f6fd6;background:#23304a}.layer span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tl{display:none;border-top:1px solid #333;background:#17171a}#tlh{display:flex;gap:8px;align-items:center;padding:4px 12px;color:#999}#tlscroll{overflow:auto;max-height:190px}#tc{display:block;cursor:default}
 #drop{display:none;position:fixed;inset:0;background:#2f6fd699;align-items:center;justify-content:center;font-size:28px;z-index:9}
 #modal{display:none;position:fixed;inset:0;background:#000a;align-items:center;justify-content:center;z-index:10}
-#modal div{background:#26262b;padding:20px;border-radius:8px;width:420px}
-#pb{height:10px;background:#111;border-radius:5px;overflow:hidden;margin:12px 0}#pf{height:100%;width:0;background:#2f6fd6}
+#modal>div{background:#26262b;padding:22px 24px;border-radius:10px;width:440px;box-shadow:0 10px 40px #000a}
+#mt{font-size:15px;color:#fff}#mm{color:#aaa;font-size:12px;word-break:break-all;min-height:16px}
+#pb{height:10px;background:#111;border-radius:5px;overflow:hidden;margin:14px 0 8px}#pf{height:100%;width:0;background:linear-gradient(90deg,#2f6fd6,#5aa2ff);transition:width .3s}
 </style>
 <div id="drop">Drop videos to add</div>
 <div id="modal"><div><b id="mt">Exporting…</b><div id="pb"><div id="pf"></div></div><div id="mm"></div>
 <div class="row" style="margin-top:12px"><button id="mc">Cancel</button></div></div></div>
 <div id="main">
   <div id="stage"><canvas id="cv"></canvas></div>
+  <div id="tl" style="display:none"><div id="tlh"><b>Timeline</b><span>zoom</span><input id="tlz" type="range" min="1" max="12" step="0.1" value="1" style="width:140px">
+    <span style="color:#666">drag clip = move · drag clip ends = trim · click ruler = scrub</span></div><div id="tlscroll"><canvas id="tc"></canvas></div></div>
   <div id="bar">
-    <button id="undo" title="Undo (⌘Z)">↶ Undo</button><button id="redo" title="Redo (⇧⌘Z)">↷ Redo</button><button id="play">▶</button><input id="seek" type="range" min="0" max="1" step="0.01" value="0"><span id="time">0.0 / 0.0 s</span>
+    <button id="undo" title="Undo (⌘Z)">↶ Undo</button><button id="redo" title="Redo (⇧⌘Z)">↷ Redo</button><button id="play">▶</button><button id="tlbtn" title="Toggle timeline (T)">Timeline</button><input id="seek" type="range" min="0" max="1" step="0.01" value="0"><span id="time">0.0 / 0.0 s</span>
   </div>
 </div>
 <div id="side">
@@ -51,6 +55,8 @@ input[type=number]{width:70px}input[type=text]{width:100%}input[type=color]{padd
     <div class="row"><label>Scale %</label><input id="is" type="number" step="1"></div>
     <div class="row"><label>Crop L %</label><input id="il" type="number" step="0.5"><label style="width:50px">T %</label><input id="it" type="number" step="0.5"></div>
     <div class="row"><label>Crop R %</label><input id="ir" type="number" step="0.5"><label style="width:50px">B %</label><input id="ib" type="number" step="0.5"></div>
+    <div class="row"><label>Start s</label><input id="ts" type="number" step="0.1" min="0"></div>
+    <div class="row"><label>In s</label><input id="ti" type="number" step="0.1" min="0"><label style="width:30px">Out</label><input id="to" type="number" step="0.1" min="0"></div>
     <div class="row"><button id="up">Forward</button><button id="dn">Backward</button><button id="vis">Hide</button><button id="del">Remove</button></div>
   </div>
   <h4>Export</h4>
@@ -58,14 +64,22 @@ input[type=number]{width:70px}input[type=text]{width:100%}input[type=color]{padd
   <div class="row"><button id="browse">Browse…</button>
     <select id="qual"><option value="x264">Quality (x264, slower)</option><option value="fast">Fast (hardware)</option></select></div>
   <div class="row"><button id="export" style="background:#2f6fd6;border-color:#2f6fd6;width:100%;padding:8px">Export</button></div>
-  <p style="color:#777;line-height:1.5">Click a video, then press ✂ Crop (or C) and drag its corners/edges to crop. Otherwise drag to move (snaps to centres/edges, hold Alt to disable), corners to scale · arrows nudge (Shift ×10) · Space plays</p>
+  <p style="color:#777;line-height:1.5">Click a video, then press ✂ Crop (or C) and drag its corners/edges to crop. Otherwise drag to move (snaps to centres/edges, hold Alt to disable), corners to scale · arrows nudge (Shift ×10) · Space plays · T toggles timeline</p>
 </div>
 <script>
 const $=id=>document.getElementById(id), cv=$('cv'), ctx=cv.getContext('2d');
-let C={w:3840,h:2160}, layers=[], sel=-1, cropMode=false, k=1, drag=null, playing=false;
+let C={w:3840,h:2160}, layers=[], sel=-1, cropMode=false, k=1, drag=null, playing=false, T=0, lastTick=0;
 const api=(p,b)=>fetch(p,{method:'POST',body:JSON.stringify(b||{})}).then(r=>r.json());
 const dims=l=>({w:(1-l.l-l.r)*l.sw*l.s, h:(1-l.t-l.b)*l.sh*l.s});
-const dur=()=>Math.max(1,...layers.map(l=>l.dur));
+const endOf=L=>L.start+L.tout-L.tin, dur=()=>Math.max(1,...layers.map(endOf));
+const isActive=L=>T>=L.start&&T<=endOf(L);
+// keep each <video> at the source time the timeline implies; force=true seeks even when already close
+function syncLayer(L,force){ const tgt=Math.min(L.tin+T-L.start,L.dur-.04);
+  if(!isActive(L)){ if(!L.v.paused)L.v.pause(); return }
+  if(playing){ if(L.v.paused){L.v.currentTime=tgt;L.v.play().catch(()=>{})} else if(Math.abs(L.v.currentTime-tgt)>.3)L.v.currentTime=tgt }
+  else{ if(force||Math.abs(L.v.currentTime-tgt)>.02)L.v.currentTime=tgt; if(!L.v.paused)L.v.pause() } }
+const syncAll=force=>layers.forEach(L=>syncLayer(L,force));
+function timeChanged(){ T=Math.min(T,dur()); $('seek').max=dur(); $('seek').value=T; tlabel(); syncAll(true); }
 // ---- undo / redo (snapshots of layer props + canvas size; video elements are shared)
 let undoS=[], redoS=[], lastKey=null, lastT=0;
 const snap=()=>({layers:layers.map(L=>({...L})),sel:layers[sel]?.id,w:C.w,h:C.h});
@@ -73,7 +87,7 @@ function push(key){ const now=Date.now();
   if(key&&key===lastKey&&now-lastT<700){lastT=now;return}
   lastKey=key;lastT=now;undoS.push(snap());if(undoS.length>200)undoS.shift();redoS=[];btns(); }
 function restore(o){ layers=o.layers.map(L=>({...L})); sel=layers.findIndex(L=>L.id===o.sel);
-  if(sel<0)sel=layers.length?0:-1; setCanvas(o.w,o.h); refresh(); btns(); }
+  if(sel<0)sel=layers.length?0:-1; setCanvas(o.w,o.h); refresh(); btns(); timeChanged(); }
 function undo(){ if(!undoS.length)return; redoS.push(snap()); restore(undoS.pop()); lastKey=null; btns(); }
 function redo(){ if(!redoS.length)return; undoS.push(snap()); restore(redoS.pop()); lastKey=null; btns(); }
 const btns=()=>{$('undo').disabled=!undoS.length;$('redo').disabled=!redoS.length};
@@ -82,7 +96,7 @@ function addLayer(f){
   if(layers.some(l=>l.id===f.id)) return;
   push();
   const v=document.createElement('video'); v.src='/video/'+f.id; v.muted=true; v.preload='auto'; v.playsInline=true;
-  const L={id:f.id,name:f.name,sw:f.w,sh:f.h,dur:f.dur,s:1,x:0,y:0,l:0,t:0,r:0,b:0,vis:true,v};
+  const L={id:f.id,name:f.name,sw:f.w,sh:f.h,dur:f.dur,s:1,x:0,y:0,l:0,t:0,r:0,b:0,vis:true,start:0,tin:0,tout:f.dur,v};
   fit(L); layers.push(L); sel=layers.length-1; refresh();
 }
 function fit(L){ const d=Math.min(C.w/L.sw,C.h/L.sh); L.s=d; L.l=L.t=L.r=L.b=0; L.x=(C.w-L.sw*d)/2; L.y=(C.h-L.sh*d)/2; }
@@ -96,7 +110,7 @@ function setCanvas(w,h){C.w=w;C.h=h;$('cw').value=w;$('ch').value=h;resize()}
 
 function draw(){
   ctx.fillStyle=$('bg').value; ctx.fillRect(0,0,cv.width,cv.height);
-  for(const L of layers){ if(!L.vis||L.v.readyState<2) continue;
+  for(const L of layers){ if(!L.vis||L.v.readyState<2||!isActive(L)) continue;
     const d=dims(L);
     ctx.drawImage(L.v,L.l*L.sw,L.t*L.sh,(1-L.l-L.r)*L.sw,(1-L.t-L.b)*L.sh,L.x*k,L.y*k,d.w*k,d.h*k);
   }
@@ -105,7 +119,10 @@ function draw(){
     ctx.strokeRect(L.x*k,L.y*k,d.w*k,d.h*k); ctx.fillStyle=ctx.strokeStyle;
     handles(L).forEach(([hx,hy],i)=>{ if(i<4||cropMode) ctx.fillRect(hx*k-5,hy*k-5,10,10); }); }
   if(drag) drawGuides();
-  if(playing){ const lead=layers.reduce((a,b)=>b.dur>a.dur?b:a,layers[0]); if(lead){ $('seek').value=lead.v.currentTime; tlabel(); if(lead.v.ended) setPlay(false);} }
+  if(playing){ const now=performance.now(); T+=(now-lastTick)/1000; lastTick=now;
+    if(T>=dur()){T=dur();setPlay(false)} else syncAll(false);
+    $('seek').value=T; tlabel(); }
+  drawTL();
   requestAnimationFrame(draw);
 }
 // ---- alignment guides: snap a dragged layer's edges/centre to canvas + other layers' edges/centres
@@ -128,7 +145,7 @@ function drawGuides(){ ctx.save(); ctx.strokeStyle='#ff3df0'; ctx.lineWidth=1; c
   ctx.stroke(); ctx.restore(); }
 function handles(L){const d=dims(L),x=L.x,y=L.y,X=x+d.w,Y=y+d.h,mx=x+d.w/2,my=y+d.h/2;
   return [[x,y],[X,y],[X,Y],[x,Y],[mx,y],[X,my],[mx,Y],[x,my]]} // 0-3 corners TL TR BR BL, 4-7 edges T R B L
-const tlabel=()=>$('time').textContent=(+$('seek').value).toFixed(1)+' / '+dur().toFixed(1)+' s';
+const tlabel=()=>$('time').textContent=T.toFixed(1)+' / '+dur().toFixed(1)+' s';
 
 // ---- interaction
 const mpos=e=>{const r=cv.getBoundingClientRect();return [(e.clientX-r.left)/k,(e.clientY-r.top)/k]};
@@ -165,6 +182,7 @@ window.onkeydown=e=>{
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();return}
   if(e.ctrlKey&&e.key.toLowerCase()==='y'){e.preventDefault();redo();return}
   if(e.code==='Space'){e.preventDefault();setPlay(!playing);return}
+  if(e.key==='t'&&!e.metaKey&&!e.ctrlKey){toggleTL();return}
   if(!L) return;
   if(e.key.startsWith('Arrow'))push('nudge');
   if(e.key==='ArrowLeft')L.x-=st; else if(e.key==='ArrowRight')L.x+=st; else if(e.key==='ArrowUp')L.y-=st; else if(e.key==='ArrowDown')L.y+=st;
@@ -176,7 +194,7 @@ window.onkeydown=e=>{
 function fields(){
   const L=layers[sel]; $('insp').style.opacity=L?1:.4; if(!L) return;
   const set=(id,v)=>{if(document.activeElement!==$(id))$(id).value=+v.toFixed(2)};
-  set('ix',L.x);set('iy',L.y);set('is',L.s*100);set('il',L.l*100);set('it',L.t*100);set('ir',L.r*100);set('ib',L.b*100);
+  set('ix',L.x);set('iy',L.y);set('is',L.s*100);set('il',L.l*100);set('it',L.t*100);set('ir',L.r*100);set('ib',L.b*100);set('ts',L.start);set('ti',L.tin);set('to',L.tout);
   $('vis').textContent=L.vis?'Hide':'Show';
 }
 function refresh(){
@@ -192,6 +210,8 @@ for(const [id,f] of [['ix',(L,v)=>L.x=v],['iy',(L,v)=>L.y=v],['is',(L,v)=>L.s=Ma
   ['ir',(L,v)=>L.r=clamp(v/100,0,.98-L.l)],['ib',(L,v)=>L.b=clamp(v/100,0,.98-L.t)]])
   $(id).oninput=()=>{const L=layers[sel];if(L&&$(id).value!==''){push('in-'+id);f(L,+$(id).value)}};
 const clamp=(v,a,b)=>Math.min(Math.max(v,a),b);
+for(const [id,f] of [['ts',(L,v)=>L.start=Math.max(0,v)],['ti',(L,v)=>L.tin=clamp(v,0,L.tout-.1)],['to',(L,v)=>L.tout=clamp(v,L.tin+.1,L.dur)]])
+  $(id).oninput=()=>{const L=layers[sel];if(L&&$(id).value!==''){push('in-'+id);f(L,+$(id).value);timeChanged()}};
 $('undo').onclick=undo;$('redo').onclick=redo;
 $('mode').onclick=()=>{cropMode=!cropMode;refresh()};
 $('fit').onclick=()=>{if(layers[sel]){push();fit(layers[sel]);fields()}};
@@ -209,11 +229,65 @@ window.onresize=resize;
 // ---- playback
 function setPlay(p){
   playing=p&&layers.length>0; $('play').textContent=playing?'❚❚':'▶';
-  for(const L of layers){ if(playing){ if(L.v.currentTime>=L.dur-.05) L.v.currentTime=0; L.v.play() } else L.v.pause(); }
-  if(playing && layers.length) $('seek').value=layers[0].v.currentTime;
+  if(playing){ if(T>=dur())T=0; lastTick=performance.now(); layers.forEach(L=>{L.v.pause()}); }
+  syncAll(true);
 }
 $('play').onclick=()=>setPlay(!playing);
-$('seek').oninput=()=>{const t=+$('seek').value;layers.forEach(L=>L.v.currentTime=Math.min(t,L.dur-.04));tlabel()};
+$('seek').oninput=()=>{T=+$('seek').value;tlabel();syncAll(false)};
+
+// ---- timeline panel
+const LBL=120, RUL=24, ROW=26; let tlDrag=null;
+const tc=$('tc'), tx=tc.getContext('2d');
+const tlOn=()=>$('tl').style.display!=='none';
+let tlFreeze=0; // keep the scale fixed while dragging so the clip doesn't run away from the cursor
+const tlPps=()=>{if(tlFreeze)return tlFreeze;const sc=$('tlscroll');return Math.max(50,sc.clientWidth-LBL-30)/dur()*(+$('tlz').value)};
+const fmt=t=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
+function toggleTL(){ $('tl').style.display=tlOn()?'none':'block'; $('tlbtn').className=tlOn()?'on':''; resize(); }
+$('tlbtn').onclick=toggleTL; $('tlz').oninput=()=>{};
+function drawTL(){
+  if(!tlOn()) return;
+  const sc=$('tlscroll'), pps=tlPps(), tot=dur();
+  const W=Math.max(sc.clientWidth,Math.ceil(LBL+tot*pps+30)), H=RUL+Math.max(1,layers.length)*ROW+6;
+  if(tc.width!==W)tc.width=W; if(tc.height!==H)tc.height=H;
+  tx.fillStyle='#17171a'; tx.fillRect(0,0,W,H);
+  tx.font='11px -apple-system,Helvetica,sans-serif'; tx.textBaseline='middle';
+  const step=[1,2,5,10,15,30,60,120,300,600].find(v=>v*pps>=70)||600;
+  tx.strokeStyle='#333'; tx.fillStyle='#888';
+  for(let t=0;t<=tot+step;t+=step){ const x=LBL+t*pps+.5; tx.beginPath(); tx.moveTo(x,RUL-6); tx.lineTo(x,H); tx.stroke(); tx.fillText(fmt(t),x+3,RUL/2); }
+  layers.forEach((_,r)=>{ const i=layers.length-1-r, L=layers[i], y=RUL+r*ROW;
+    tx.fillStyle=i===sel?'#23304a':'#1d1d21'; tx.fillRect(0,y,W,ROW-2);
+    tx.fillStyle='#ccc'; tx.fillText(L.name.slice(0,16),8,y+ROW/2-1);
+    const x=LBL+L.start*pps, w=(L.tout-L.tin)*pps;
+    tx.fillStyle=!L.vis?'#3a3a42':i===sel?'#2f6fd6':'#4a7f5b'; tx.fillRect(x,y+2,w,ROW-6);
+    tx.fillStyle='#0004'; tx.fillRect(x,y+2,5,ROW-6); tx.fillRect(x+w-5,y+2,5,ROW-6);
+    tx.fillStyle='#fff'; tx.fillText(((L.tout-L.tin).toFixed(1))+'s',x+9,y+ROW/2-1); });
+  const px=LBL+T*pps+.5; tx.strokeStyle='#ff4d4d'; tx.lineWidth=2; tx.beginPath(); tx.moveTo(px,0); tx.lineTo(px,H); tx.stroke(); tx.lineWidth=1;
+  tx.fillStyle='#ff4d4d'; tx.beginPath(); tx.moveTo(px-6,0); tx.lineTo(px+6,0); tx.lineTo(px,9); tx.fill();
+}
+const tpos=e=>{const r=tc.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top]};
+tc.addEventListener('mousedown',e=>{
+  const [x,y]=tpos(e), pps=tlPps(); tlFreeze=pps;
+  if(y<RUL||x<LBL&&y<RUL){ tlDrag={type:'scrub'}; T=clamp((x-LBL)/pps,0,dur()); timeChanged(); return }
+  const r=Math.floor((y-RUL)/ROW), i=layers.length-1-r; if(i<0||i>=layers.length) return;
+  sel=i; refresh(); const L=layers[i], xs=LBL+L.start*pps, xe=LBL+endOf(L)*pps;
+  if(x<LBL){ T=clamp(T,0,dur()); return }
+  let type=null; if(Math.abs(x-xs)<=6)type='tin'; else if(Math.abs(x-xe)<=6)type='tout'; else if(x>xs&&x<xe)type='move';
+  if(type) tlDrag={type,i,x0:x,start0:L.start,tin0:L.tin,tout0:L.tout,pushed:false};
+});
+window.addEventListener('mousemove',e=>{
+  if(!tlDrag) return; const [x]=tpos(e), pps=tlPps();
+  if(tlDrag.type==='scrub'){ T=clamp((x-LBL)/pps,0,dur()); tlabel(); $('seek').value=T; syncAll(false); return }
+  const L=layers[tlDrag.i], D=tlDrag, dt=(x-D.x0)/pps;
+  if(!D.pushed&&Math.abs(x-D.x0)>2){D.pushed=true;push()} if(!D.pushed) return;
+  if(D.type==='move'){ let s=Math.max(0,D.start0+dt), len=L.tout-L.tin; const th=6/pps, c=[0,T];
+    layers.forEach((o,j)=>{if(j!==D.i){c.push(o.start,endOf(o))}});
+    let best=null; for(const v of c){ for(const d of [v-s,v-(s+len)]) if(Math.abs(d)<=th&&(best===null||Math.abs(d)<Math.abs(best)))best=d; }
+    L.start=Math.max(0,s+(best||0)); }
+  else if(D.type==='tin'){ const nt=clamp(D.tin0+dt,Math.max(0,D.tin0-D.start0),D.tout0-.1); L.start=D.start0+(nt-D.tin0); L.tin=nt; }
+  else{ L.tout=clamp(D.tout0+dt,D.tin0+.1,L.dur); }
+  fields(); $('seek').max=dur();
+});
+window.addEventListener('mouseup',()=>{ tlFreeze=0; if(tlDrag&&tlDrag.type!=='scrub')timeChanged(); tlDrag=null; });
 
 // ---- drop / upload
 let dc=0;
@@ -237,7 +311,7 @@ $('export').onclick=async()=>{
   if(!layers.length) return alert('Add at least one video');
   if(!$('out').value) { await $('browse').onclick(); if(!$('out').value) return; }
   const body={canvas:{w:C.w,h:C.h,fps:+$('fps').value,bg:$('bg').value},quality:$('qual').value==='fast'?'fast':'x264',out:$('out').value,
-    layers:layers.map(L=>({id:L.id,x:L.x,y:L.y,s:L.s,l:L.l,t:L.t,r:L.r,b:L.b,vis:L.vis}))};
+    layers:layers.map(L=>({id:L.id,x:L.x,y:L.y,s:L.s,l:L.l,t:L.t,r:L.r,b:L.b,vis:L.vis,start:L.start,tin:L.tin,tout:L.tout}))};
   const r=await api('/api/export',body); if(r.error) return alert(r.error);
   showModal('Exporting…',0); $('mc').textContent='Cancel';
   poll=setInterval(async()=>{const j=await fetch('/api/job').then(r=>r.json());

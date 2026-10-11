@@ -51,18 +51,23 @@ def build_cmd(req):
     layers = [l for l in req['layers'] if l.get('vis', True)]
     if not layers:
         raise ValueError('no visible layers')
-    D = max(FILES[l['id']]['dur'] for l in layers)
+    def span(l):
+        f = FILES[l['id']]
+        tin = float(l.get('tin', 0)); tout = float(l.get('tout', f['dur']))
+        return float(l.get('start', 0)), tin, max(0.1, tout - tin)
+    D = max(span(l)[0] + span(l)[2] for l in layers)
     cmd, parts, cur = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-progress', 'pipe:1', '-nostats'], [], 'b0'
     parts.append(f'color=c={bg}:s={W}x{H}:r={fps}:d={D:.3f}[b0]')
     for i, l in enumerate(layers):
         f = FILES[l['id']]
-        cmd += ['-i', f['path']]
+        start, tin, ln = span(l)
+        cmd += ['-ss', f'{tin:.3f}', '-t', f'{ln:.3f}', '-i', f['path']]
         cx, cy = round(f['w'] * l['l']), round(f['h'] * l['t'])
         cw = max(2, round(f['w'] * (1 - l['l'] - l['r']))); ch = max(2, round(f['h'] * (1 - l['t'] - l['b'])))
         cw, ch = min(cw, f['w'] - cx), min(ch, f['h'] - cy)
         dw = max(2, round(cw * l['s']) // 2 * 2); dh = max(2, round(ch * l['s']) // 2 * 2)
-        parts.append(f'[{i}:v]fps={fps},crop={cw}:{ch}:{cx}:{cy},scale={dw}:{dh}:flags=lanczos,setsar=1[v{i}]')
-        parts.append(f'[{cur}][v{i}]overlay={round(l["x"])}:{round(l["y"])}:eof_action=pass[b{i + 1}]')
+        parts.append(f'[{i}:v]fps={fps},setpts=PTS-STARTPTS+{start:.3f}/TB,crop={cw}:{ch}:{cx}:{cy},scale={dw}:{dh}:flags=lanczos,setsar=1[v{i}]')
+        parts.append(f'[{cur}][v{i}]overlay={round(l["x"])}:{round(l["y"])}:eof_action=pass:enable=between(t\\,{start:.3f}\\,{start + ln:.3f})[b{i + 1}]')
         cur = f'b{i + 1}'
     parts.append(f'[{cur}]format=yuv420p[out]')
     enc = (['-c:v', 'h264_videotoolbox', '-b:v', '60M'] if req.get('quality') == 'fast'
