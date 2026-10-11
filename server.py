@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Tiny video layout editor: local web UI + ffmpeg export. Run: python3 -I server.py [port]"""
+"""VidCrop: local web UI to arrange/crop videos on a canvas, exported with ffmpeg.
+Run: python3 -I server.py [port]   (VIDCROP_VIDEOS=<dir> sets the folder auto-loaded at startup)"""
 import hashlib, json, os, re, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP = os.path.dirname(os.path.abspath(__file__))
-VIDEOS = os.path.join(os.path.dirname(APP), 'videos')
+VIDEOS = os.environ.get('VIDCROP_VIDEOS', '/Users/gupmadha/Desktop/whiteboardf/videos')
 UPLOADS = os.path.join(APP, 'uploads')
 FILES = {}                      # id -> {path,name,w,h,dur}
 JOB = {'status': 'idle', 'progress': 0, 'error': '', 'out': ''}
@@ -182,6 +183,6 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8766
-    print(f'Video editor on http://localhost:{port}')
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8767
+    print(f'VidCrop on http://localhost:{port}')
     ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()
