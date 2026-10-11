@@ -1,0 +1,239 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Video Layout Editor</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#1b1b1f;color:#ddd;font:13px -apple-system,Helvetica,sans-serif;display:flex;height:100vh}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#stage{flex:1;display:flex;align-items:center;justify-content:center;padding:12px;min-height:0}
+canvas{background:#000;box-shadow:0 0 0 1px #444;cursor:default}
+#bar{display:flex;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid #333}
+#seek{flex:1}
+#side{width:300px;border-left:1px solid #333;padding:10px;overflow:auto}
+h4{margin:14px 0 6px;color:#999;font-weight:600;text-transform:uppercase;font-size:11px}
+button,select,input{background:#2b2b31;color:#ddd;border:1px solid #444;border-radius:4px;padding:4px 8px;font:inherit}
+button:hover{background:#38383f;cursor:pointer}button.on{background:#2f6fd6;border-color:#2f6fd6}
+input[type=number]{width:70px}input[type=text]{width:100%}input[type=color]{padding:0;width:40px;height:26px}
+.row{display:flex;gap:6px;align-items:center;margin:4px 0;flex-wrap:wrap}
+.row label{width:62px;color:#999}
+.layer{display:flex;gap:6px;align-items:center;padding:4px 6px;border:1px solid #333;border-radius:4px;margin:3px 0;cursor:pointer}
+.layer.sel{border-color:#2f6fd6;background:#23304a}.layer span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#drop{display:none;position:fixed;inset:0;background:#2f6fd699;align-items:center;justify-content:center;font-size:28px;z-index:9}
+#modal{display:none;position:fixed;inset:0;background:#000a;align-items:center;justify-content:center;z-index:10}
+#modal div{background:#26262b;padding:20px;border-radius:8px;width:420px}
+#pb{height:10px;background:#111;border-radius:5px;overflow:hidden;margin:12px 0}#pf{height:100%;width:0;background:#2f6fd6}
+</style>
+<div id="drop">Drop videos to add</div>
+<div id="modal"><div><b id="mt">Exporting…</b><div id="pb"><div id="pf"></div></div><div id="mm"></div>
+<div class="row" style="margin-top:12px"><button id="mc">Cancel</button></div></div></div>
+<div id="main">
+  <div id="stage"><canvas id="cv"></canvas></div>
+  <div id="bar">
+    <button id="undo" title="Undo (⌘Z)">↶ Undo</button><button id="redo" title="Redo (⇧⌘Z)">↷ Redo</button><button id="play">▶</button><input id="seek" type="range" min="0" max="1" step="0.01" value="0"><span id="time">0.0 / 0.0 s</span>
+  </div>
+</div>
+<div id="side">
+  <h4>Canvas</h4>
+  <div class="row"><select id="preset">
+    <option value="3840x2160">4K 16:9 (3840×2160)</option><option value="2560x1440">2K 16:9 (2560×1440)</option>
+    <option value="1920x1080">1080p 16:9</option><option value="2160x3840">4K 9:16</option><option value="2160x2160">Square 2160</option>
+    <option value="custom">Custom…</option></select></div>
+  <div class="row"><label>Size</label><input id="cw" type="number" step="2"> × <input id="ch" type="number" step="2"></div>
+  <div class="row"><label>Background</label><input id="bg" type="color" value="#000000"><label style="width:auto">FPS</label><input id="fps" type="number" value="30" style="width:55px"></div>
+  <h4>Layers (top = front)</h4>
+  <div class="row"><button id="add">Add videos…</button><span style="color:#777">or drop files</span></div>
+  <div id="layers"></div>
+  <h4>Selected layer</h4>
+  <div id="insp">
+    <div class="row"><button id="mode" style="width:100%;padding:7px">✂ Crop</button></div><div class="row"><button id="fit">Fit</button><button id="ctr">Center</button><button id="rc">Reset crop</button></div>
+    <div class="row"><label>X</label><input id="ix" type="number"><label style="width:20px">Y</label><input id="iy" type="number"></div>
+    <div class="row"><label>Scale %</label><input id="is" type="number" step="1"></div>
+    <div class="row"><label>Crop L %</label><input id="il" type="number" step="0.5"><label style="width:50px">T %</label><input id="it" type="number" step="0.5"></div>
+    <div class="row"><label>Crop R %</label><input id="ir" type="number" step="0.5"><label style="width:50px">B %</label><input id="ib" type="number" step="0.5"></div>
+    <div class="row"><button id="up">Forward</button><button id="dn">Backward</button><button id="vis">Hide</button><button id="del">Remove</button></div>
+  </div>
+  <h4>Export</h4>
+  <div class="row"><input id="out" type="text" placeholder="output path (.mp4)"></div>
+  <div class="row"><button id="browse">Browse…</button>
+    <select id="qual"><option value="x264">Quality (x264, slower)</option><option value="fast">Fast (hardware)</option></select></div>
+  <div class="row"><button id="export" style="background:#2f6fd6;border-color:#2f6fd6;width:100%;padding:8px">Export</button></div>
+  <p style="color:#777;line-height:1.5">Click a video, then press ✂ Crop (or C) and drag its corners/edges to crop. Otherwise drag to move, corners to scale · arrows nudge (Shift ×10) · Space plays</p>
+</div>
+<script>
+const $=id=>document.getElementById(id), cv=$('cv'), ctx=cv.getContext('2d');
+let C={w:3840,h:2160}, layers=[], sel=-1, cropMode=false, k=1, drag=null, playing=false;
+const api=(p,b)=>fetch(p,{method:'POST',body:JSON.stringify(b||{})}).then(r=>r.json());
+const dims=l=>({w:(1-l.l-l.r)*l.sw*l.s, h:(1-l.t-l.b)*l.sh*l.s});
+const dur=()=>Math.max(1,...layers.map(l=>l.dur));
+// ---- undo / redo (snapshots of layer props + canvas size; video elements are shared)
+let undoS=[], redoS=[], lastKey=null, lastT=0;
+const snap=()=>({layers:layers.map(L=>({...L})),sel:layers[sel]?.id,w:C.w,h:C.h});
+function push(key){ const now=Date.now();
+  if(key&&key===lastKey&&now-lastT<700){lastT=now;return}
+  lastKey=key;lastT=now;undoS.push(snap());if(undoS.length>200)undoS.shift();redoS=[];btns(); }
+function restore(o){ layers=o.layers.map(L=>({...L})); sel=layers.findIndex(L=>L.id===o.sel);
+  if(sel<0)sel=layers.length?0:-1; setCanvas(o.w,o.h); refresh(); btns(); }
+function undo(){ if(!undoS.length)return; redoS.push(snap()); restore(undoS.pop()); lastKey=null; btns(); }
+function redo(){ if(!redoS.length)return; undoS.push(snap()); restore(redoS.pop()); lastKey=null; btns(); }
+const btns=()=>{$('undo').disabled=!undoS.length;$('redo').disabled=!redoS.length};
+
+function addLayer(f){
+  if(layers.some(l=>l.id===f.id)) return;
+  push();
+  const v=document.createElement('video'); v.src='/video/'+f.id; v.muted=true; v.preload='auto'; v.playsInline=true;
+  const L={id:f.id,name:f.name,sw:f.w,sh:f.h,dur:f.dur,s:1,x:0,y:0,l:0,t:0,r:0,b:0,vis:true,v};
+  fit(L); layers.push(L); sel=layers.length-1; refresh();
+}
+function fit(L){ const d=Math.min(C.w/L.sw,C.h/L.sh); L.s=d; L.l=L.t=L.r=L.b=0; L.x=(C.w-L.sw*d)/2; L.y=(C.h-L.sh*d)/2; }
+function center(L){const d=dims(L);L.x=(C.w-d.w)/2;L.y=(C.h-d.h)/2}
+
+function resize(){
+  const st=$('stage'), aw=st.clientWidth-24, ah=st.clientHeight-24;
+  k=Math.min(aw/C.w,ah/C.h); cv.width=Math.round(C.w*k); cv.height=Math.round(C.h*k);
+}
+function setCanvas(w,h){C.w=w;C.h=h;$('cw').value=w;$('ch').value=h;resize()}
+
+function draw(){
+  ctx.fillStyle=$('bg').value; ctx.fillRect(0,0,cv.width,cv.height);
+  for(const L of layers){ if(!L.vis||L.v.readyState<2) continue;
+    const d=dims(L);
+    ctx.drawImage(L.v,L.l*L.sw,L.t*L.sh,(1-L.l-L.r)*L.sw,(1-L.t-L.b)*L.sh,L.x*k,L.y*k,d.w*k,d.h*k);
+  }
+  const L=layers[sel];
+  if(L){ const d=dims(L); ctx.strokeStyle=cropMode?'#ff9f1a':'#2f9bff'; ctx.lineWidth=2;
+    ctx.strokeRect(L.x*k,L.y*k,d.w*k,d.h*k); ctx.fillStyle=ctx.strokeStyle;
+    handles(L).forEach(([hx,hy],i)=>{ if(i<4||cropMode) ctx.fillRect(hx*k-5,hy*k-5,10,10); }); }
+  if(playing){ const lead=layers.reduce((a,b)=>b.dur>a.dur?b:a,layers[0]); if(lead){ $('seek').value=lead.v.currentTime; tlabel(); if(lead.v.ended) setPlay(false);} }
+  requestAnimationFrame(draw);
+}
+function handles(L){const d=dims(L),x=L.x,y=L.y,X=x+d.w,Y=y+d.h,mx=x+d.w/2,my=y+d.h/2;
+  return [[x,y],[X,y],[X,Y],[x,Y],[mx,y],[X,my],[mx,Y],[x,my]]} // 0-3 corners TL TR BR BL, 4-7 edges T R B L
+const tlabel=()=>$('time').textContent=(+$('seek').value).toFixed(1)+' / '+dur().toFixed(1)+' s';
+
+// ---- interaction
+const mpos=e=>{const r=cv.getBoundingClientRect();return [(e.clientX-r.left)/k,(e.clientY-r.top)/k]};
+cv.onmousedown=e=>{
+  const [mx,my]=mpos(e), L=layers[sel];
+  if(L){ const hs=handles(L); for(let i=0;i<8;i++){ if(Math.abs(hs[i][0]-mx)*k<9&&Math.abs(hs[i][1]-my)*k<9){
+      if(i>=4&&!cropMode) continue; drag={type:'h',i,start:{...L,v:null}}; return; } } }
+  for(let i=layers.length-1;i>=0;i--){const l=layers[i],d=dims(l);
+    if(l.vis&&mx>=l.x&&mx<=l.x+d.w&&my>=l.y&&my<=l.y+d.h){sel=i;refresh();drag={type:'m',ox:mx-l.x,oy:my-l.y};return}}
+  sel=-1;refresh();
+};
+window.onmousemove=e=>{
+  if(!drag) return; const L=layers[sel]; if(!L) return; if(!drag.pushed){drag.pushed=true;push();} const [mx,my]=mpos(e);
+  if(drag.type==='m'){L.x=mx-drag.ox;L.y=my-drag.oy}
+  else{ const S=drag.start,i=drag.i,sd=dims(S);
+    const left=i===0||i===3||i===7, right=i===1||i===2||i===5, top=i===0||i===1||i===4, bot=i===2||i===3||i===6;
+    if(cropMode){
+      if(left){const nl=Math.min(Math.max(0,S.l+(mx-S.x)/(S.sw*S.s)),1-S.r-.02);L.l=nl;L.x=S.x+(nl-S.l)*S.sw*S.s}
+      if(right){L.r=Math.min(Math.max(0,S.r+((S.x+sd.w)-mx)/(S.sw*S.s)),1-S.l-.02)}
+      if(top){const nt=Math.min(Math.max(0,S.t+(my-S.y)/(S.sh*S.s)),1-S.b-.02);L.t=nt;L.y=S.y+(nt-S.t)*S.sh*S.s}
+      if(bot){L.b=Math.min(Math.max(0,S.b+((S.y+sd.h)-my)/(S.sh*S.s)),1-S.t-.02)}
+    }else{ // uniform scale about opposite corner
+      const ax=left?S.x+sd.w:S.x, ay=top?S.y+sd.h:S.y;
+      const ns=Math.max(.01,Math.max(Math.abs(mx-ax)/((1-S.l-S.r)*S.sw),Math.abs(my-ay)/((1-S.t-S.b)*S.sh)));
+      L.s=ns; const d=dims(L); L.x=left?ax-d.w:ax; L.y=top?ay-d.h:ay;
+    }
+  }
+  fields();
+};
+window.onmouseup=()=>{drag=null};
+window.onkeydown=e=>{
+  if(e.target.tagName==='INPUT'&&e.target.type!=='range') return;
+  const L=layers[sel], st=e.shiftKey?10:1;
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();return}
+  if(e.ctrlKey&&e.key.toLowerCase()==='y'){e.preventDefault();redo();return}
+  if(e.code==='Space'){e.preventDefault();setPlay(!playing);return}
+  if(!L) return;
+  if(e.key.startsWith('Arrow'))push('nudge');
+  if(e.key==='ArrowLeft')L.x-=st; else if(e.key==='ArrowRight')L.x+=st; else if(e.key==='ArrowUp')L.y-=st; else if(e.key==='ArrowDown')L.y+=st;
+  else if(e.key==='c'&&!e.metaKey&&!e.ctrlKey){cropMode=!cropMode;refresh();return} else return;
+  e.preventDefault(); fields();
+};
+
+// ---- UI state
+function fields(){
+  const L=layers[sel]; $('insp').style.opacity=L?1:.4; if(!L) return;
+  const set=(id,v)=>{if(document.activeElement!==$(id))$(id).value=+v.toFixed(2)};
+  set('ix',L.x);set('iy',L.y);set('is',L.s*100);set('il',L.l*100);set('it',L.t*100);set('ir',L.r*100);set('ib',L.b*100);
+  $('vis').textContent=L.vis?'Hide':'Show';
+}
+function refresh(){
+  $('layers').innerHTML='';
+  [...layers.keys()].reverse().forEach(i=>{const L=layers[i],d=document.createElement('div');
+    d.className='layer'+(i===sel?' sel':'');d.innerHTML=`<span title="${L.name}">${L.name}</span><small>${L.sw}×${L.sh}</small>`;
+    d.onclick=()=>{sel=i;refresh()};$('layers').appendChild(d)});
+  $('mode').textContent=cropMode?'✂ Cropping — drag corners/edges (click to finish)':'✂ Crop'; $('mode').className=cropMode?'on':'';cv.style.cursor=cropMode?'crosshair':'default';
+  const m=dur(); $('seek').max=m; tlabel(); fields();
+}
+for(const [id,f] of [['ix',(L,v)=>L.x=v],['iy',(L,v)=>L.y=v],['is',(L,v)=>L.s=Math.max(.01,v/100)],
+  ['il',(L,v)=>L.l=clamp(v/100,0,.98-L.r)],['it',(L,v)=>L.t=clamp(v/100,0,.98-L.b)],
+  ['ir',(L,v)=>L.r=clamp(v/100,0,.98-L.l)],['ib',(L,v)=>L.b=clamp(v/100,0,.98-L.t)]])
+  $(id).oninput=()=>{const L=layers[sel];if(L&&$(id).value!==''){push('in-'+id);f(L,+$(id).value)}};
+const clamp=(v,a,b)=>Math.min(Math.max(v,a),b);
+$('undo').onclick=undo;$('redo').onclick=redo;
+$('mode').onclick=()=>{cropMode=!cropMode;refresh()};
+$('fit').onclick=()=>{if(layers[sel]){push();fit(layers[sel]);fields()}};
+$('ctr').onclick=()=>{if(layers[sel]){push();center(layers[sel]);fields()}};
+$('rc').onclick=()=>{const L=layers[sel];if(L){push();L.l=L.t=L.r=L.b=0;fields()}};
+$('up').onclick=()=>{if(sel>=0&&sel<layers.length-1){push();[layers[sel],layers[sel+1]]=[layers[sel+1],layers[sel]];sel++;refresh()}};
+$('dn').onclick=()=>{if(sel>0){push();[layers[sel],layers[sel-1]]=[layers[sel-1],layers[sel]];sel--;refresh()}};
+$('vis').onclick=()=>{if(layers[sel]){push();layers[sel].vis=!layers[sel].vis;fields()}};
+$('del').onclick=()=>{if(sel>=0){push();layers.splice(sel,1);sel=Math.min(sel,layers.length-1);refresh()}};
+$('preset').onchange=()=>{const v=$('preset').value;if(v!=='custom'){push();const [w,h]=v.split('x').map(Number);setCanvas(w,h)}};
+$('cw').onchange=$('ch').onchange=()=>{push('canvas');$('preset').value='custom';setCanvas(+$('cw').value,+$('ch').value)};
+$('add').onclick=async()=>{(await api('/api/pick')).forEach(addLayer)};
+window.onresize=resize;
+
+// ---- playback
+function setPlay(p){
+  playing=p&&layers.length>0; $('play').textContent=playing?'❚❚':'▶';
+  for(const L of layers){ if(playing){ if(L.v.currentTime>=L.dur-.05) L.v.currentTime=0; L.v.play() } else L.v.pause(); }
+  if(playing && layers.length) $('seek').value=layers[0].v.currentTime;
+}
+$('play').onclick=()=>setPlay(!playing);
+$('seek').oninput=()=>{const t=+$('seek').value;layers.forEach(L=>L.v.currentTime=Math.min(t,L.dur-.04));tlabel()};
+
+// ---- drop / upload
+let dc=0;
+window.ondragenter=e=>{e.preventDefault();dc++;$('drop').style.display='flex'};
+window.ondragleave=e=>{if(--dc<=0){dc=0;$('drop').style.display='none'}};
+window.ondragover=e=>e.preventDefault();
+window.ondrop=async e=>{e.preventDefault();dc=0;$('drop').style.display='none';
+  for(const f of e.dataTransfer.files){ if(!f.type.startsWith('video/')&&!/\.(mp4|mov|m4v|mkv|webm)$/i.test(f.name)) continue;
+    showModal('Importing '+f.name+'…',null);
+    const r=await fetch('/api/upload?name='+encodeURIComponent(f.name),{method:'POST',body:f}).then(r=>r.json());
+    if(r.error) alert(r.error); else addLayer(r); }
+  hideModal();};
+
+// ---- export
+let poll=null;
+const showModal=(t,p)=>{$('modal').style.display='flex';$('mt').textContent=t;$('pf').style.width=(p==null?100:p*100)+'%';$('mm').textContent='';$('mc').style.display=p==null?'none':''};
+const hideModal=()=>{$('modal').style.display='none';clearInterval(poll)};
+$('browse').onclick=async()=>{const r=await api('/api/picksave');if(r.path)$('out').value=r.path.endsWith('.mp4')?r.path:r.path+'.mp4'};
+$('mc').onclick=()=>{ if($('mc').textContent==='Close') return hideModal(); api('/api/cancel') };
+$('export').onclick=async()=>{
+  if(!layers.length) return alert('Add at least one video');
+  if(!$('out').value) { await $('browse').onclick(); if(!$('out').value) return; }
+  const body={canvas:{w:C.w,h:C.h,fps:+$('fps').value,bg:$('bg').value},quality:$('qual').value==='fast'?'fast':'x264',out:$('out').value,
+    layers:layers.map(L=>({id:L.id,x:L.x,y:L.y,s:L.s,l:L.l,t:L.t,r:L.r,b:L.b,vis:L.vis}))};
+  const r=await api('/api/export',body); if(r.error) return alert(r.error);
+  showModal('Exporting…',0); $('mc').textContent='Cancel';
+  poll=setInterval(async()=>{const j=await fetch('/api/job').then(r=>r.json());
+    $('pf').style.width=(j.progress*100)+'%'; $('mm').textContent=Math.round(j.progress*100)+'%';
+    if(j.status!=='running'){clearInterval(poll);$('mt').textContent={done:'Done ✔',error:'Failed',cancelled:'Cancelled'}[j.status]||j.status;
+      $('mm').textContent=j.status==='done'?j.out:j.error;$('mc').textContent='Close';$('mc').style.display=''}},500);
+};
+
+// ---- init: preload the three timelapse videos with a default layout
+(async()=>{
+  setCanvas(3840,2160); resize();
+  const fs=await fetch('/api/defaults').then(r=>r.json()); fs.forEach(addLayer);
+  const by=n=>layers.find(l=>l.name===n);
+  const face=by('face.mp4'), wb=by('whiteboard.mp4'), dt=by('date.mp4');
+  if(face&&wb){ face.s=.5; face.x=0; face.y=0; wb.s=.5; wb.x=1920; wb.y=0; }
+  if(dt){ dt.s=1; dt.x=(C.w-dt.sw)/2; dt.y=1200; }
+  sel=layers.length?0:-1; undoS=[];redoS=[]; refresh(); btns(); draw();
+})();
+</script>
