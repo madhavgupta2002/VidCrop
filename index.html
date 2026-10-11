@@ -58,7 +58,7 @@ input[type=number]{width:70px}input[type=text]{width:100%}input[type=color]{padd
   <div class="row"><button id="browse">Browse…</button>
     <select id="qual"><option value="x264">Quality (x264, slower)</option><option value="fast">Fast (hardware)</option></select></div>
   <div class="row"><button id="export" style="background:#2f6fd6;border-color:#2f6fd6;width:100%;padding:8px">Export</button></div>
-  <p style="color:#777;line-height:1.5">Click a video, then press ✂ Crop (or C) and drag its corners/edges to crop. Otherwise drag to move, corners to scale · arrows nudge (Shift ×10) · Space plays</p>
+  <p style="color:#777;line-height:1.5">Click a video, then press ✂ Crop (or C) and drag its corners/edges to crop. Otherwise drag to move (snaps to centres/edges, hold Alt to disable), corners to scale · arrows nudge (Shift ×10) · Space plays</p>
 </div>
 <script>
 const $=id=>document.getElementById(id), cv=$('cv'), ctx=cv.getContext('2d');
@@ -104,9 +104,28 @@ function draw(){
   if(L){ const d=dims(L); ctx.strokeStyle=cropMode?'#ff9f1a':'#2f9bff'; ctx.lineWidth=2;
     ctx.strokeRect(L.x*k,L.y*k,d.w*k,d.h*k); ctx.fillStyle=ctx.strokeStyle;
     handles(L).forEach(([hx,hy],i)=>{ if(i<4||cropMode) ctx.fillRect(hx*k-5,hy*k-5,10,10); }); }
+  if(drag) drawGuides();
   if(playing){ const lead=layers.reduce((a,b)=>b.dur>a.dur?b:a,layers[0]); if(lead){ $('seek').value=lead.v.currentTime; tlabel(); if(lead.v.ended) setPlay(false);} }
   requestAnimationFrame(draw);
 }
+// ---- alignment guides: snap a dragged layer's edges/centre to canvas + other layers' edges/centres
+let guides={x:[],y:[]};
+function targets(L){ const xs=[0,C.w/2,C.w], ys=[0,C.h/2,C.h];
+  for(const o of layers){ if(o===L||!o.vis) continue; const d=dims(o); xs.push(o.x,o.x+d.w/2,o.x+d.w); ys.push(o.y,o.y+d.h/2,o.y+d.h); }
+  return {xs,ys}; }
+const feats=(a,len)=>[a,a+len/2,a+len];
+function nearest(vals,tg,th){ let best=null; for(const v of vals) for(const t of tg){ const df=t-v; if(Math.abs(df)<=th&&(best===null||Math.abs(df)<Math.abs(best))) best=df; } return best; }
+function snapMove(L){ const d=dims(L),T=targets(L),th=8/k;
+  const dx=nearest(feats(L.x,d.w),T.xs,th); if(dx!==null)L.x+=dx;
+  const dy=nearest(feats(L.y,d.h),T.ys,th); if(dy!==null)L.y+=dy; }
+function calcGuides(L){ const d=dims(L),T=targets(L),eps=1/k,g={x:[],y:[]};
+  for(const v of feats(L.x,d.w)) for(const t of T.xs) if(Math.abs(v-t)<=eps&&!g.x.includes(t)) g.x.push(t);
+  for(const v of feats(L.y,d.h)) for(const t of T.ys) if(Math.abs(v-t)<=eps&&!g.y.includes(t)) g.y.push(t);
+  return g; }
+function drawGuides(){ ctx.save(); ctx.strokeStyle='#ff3df0'; ctx.lineWidth=1; ctx.setLineDash([6,4]); ctx.beginPath();
+  for(const x of guides.x){ctx.moveTo(Math.round(x*k)+.5,0);ctx.lineTo(Math.round(x*k)+.5,cv.height)}
+  for(const y of guides.y){ctx.moveTo(0,Math.round(y*k)+.5);ctx.lineTo(cv.width,Math.round(y*k)+.5)}
+  ctx.stroke(); ctx.restore(); }
 function handles(L){const d=dims(L),x=L.x,y=L.y,X=x+d.w,Y=y+d.h,mx=x+d.w/2,my=y+d.h/2;
   return [[x,y],[X,y],[X,Y],[x,Y],[mx,y],[X,my],[mx,Y],[x,my]]} // 0-3 corners TL TR BR BL, 4-7 edges T R B L
 const tlabel=()=>$('time').textContent=(+$('seek').value).toFixed(1)+' / '+dur().toFixed(1)+' s';
@@ -123,7 +142,7 @@ cv.onmousedown=e=>{
 };
 window.onmousemove=e=>{
   if(!drag) return; const L=layers[sel]; if(!L) return; if(!drag.pushed){drag.pushed=true;push();} const [mx,my]=mpos(e);
-  if(drag.type==='m'){L.x=mx-drag.ox;L.y=my-drag.oy}
+  if(drag.type==='m'){L.x=mx-drag.ox;L.y=my-drag.oy;if(!e.altKey)snapMove(L)}
   else{ const S=drag.start,i=drag.i,sd=dims(S);
     const left=i===0||i===3||i===7, right=i===1||i===2||i===5, top=i===0||i===1||i===4, bot=i===2||i===3||i===6;
     if(cropMode){
@@ -137,9 +156,9 @@ window.onmousemove=e=>{
       L.s=ns; const d=dims(L); L.x=left?ax-d.w:ax; L.y=top?ay-d.h:ay;
     }
   }
-  fields();
+  guides=calcGuides(L); fields();
 };
-window.onmouseup=()=>{drag=null};
+window.onmouseup=()=>{drag=null;guides={x:[],y:[]}};
 window.onkeydown=e=>{
   if(e.target.tagName==='INPUT'&&e.target.type!=='range') return;
   const L=layers[sel], st=e.shiftKey?10:1;
